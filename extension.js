@@ -4,6 +4,7 @@
 const vscode = require('vscode');
 const fs = require('fs');
 const path = require('path');
+const CryptoJS = require("crypto-js");
 
 // Array to track where notes were logged: {uri, line}
 let noteLocations = new Map();
@@ -17,80 +18,120 @@ let codeLensProvider;
  */
 function activate(context) {
 
-	// Use the console to output diagnostic information (console.log) and errors (console.error)
-	// This line of code will only be executed once when your extension is activated
-	console.log('Congratulations, your extension "live-doc-logger" is now active!');
+    const sb = vscode.window.createStatusBarItem(
+        vscode.StatusBarAlignment.Right,
+        100
+    )
 
-	// The command has been defined in the package.json file
-	// Now provide the implementation of the command with  registerCommand
-	// The commandId parameter must match the command field in package.json
-	const disposable = vscode.commands.registerCommand('live-doc-logger.DocLog', async () => {
-		// The code you place here will be executed every time your command is executed
-		const editor = vscode.window.activeTextEditor;
+    sb.text = '$(file-text) Doc'
+    sb.tooltip = 'Show Command Palette';
+    sb.command = 'live-doc-logger.DocLog';
+    sb.show();
+
+    // Use the console to output diagnostic information (console.log) and errors (console.error)
+    // This line of code will only be executed once when your extension is activated
+    console.log('Congratulations, your extension "live-doc-logger" is now active!');
+
+    // The command has been defined in the package.json file
+    // Now provide the implementation of the command with  registerCommand
+    // The commandId parameter must match the command field in package.json
+    const disposable = vscode.commands.registerCommand('live-doc-logger.DocLog', async () => {
+        // The code you place here will be executed every time your command is executed
+        const editor = vscode.window.activeTextEditor;
         if (!editor) {
             vscode.window.showErrorMessage('Open a file and place the cursor to log a note.');
             return;
         }
-		
-		vscode.window.showInputBox({
-			prompt: 'Write your note here…',
-			placeHolder: 'E.g. Fixed off-by-one error in parser',
-			ignoreFocusOut: true
-		})
-		.then(input => {
-			if (typeof input !== 'string') {
-				return; // user cancelled
-			}
 
-			// 1. Figure out workspace folder
-			const folders = vscode.workspace.workspaceFolders;
-			if (!folders || folders.length === 0) {
-				vscode.window.showErrorMessage('Open a folder first to save notes.');
-				return;
-			}
+        const selection = editor.selection;
+        if (selection.isEmpty) {
+            vscode.window.showErrorMessage(
+                'Select a block of code, if you do not have code then use comments'
+            )
+            return
+        }
 
-			const rootPath = folders[0].uri.fsPath;
-			const relPath = path.relative(rootPath, editor.document.uri.fsPath);
-			const lineNum = editor.selection.active.line;
-			const heading = `### ${relPath}:${lineNum + 1}`;
-			const date = new Date().toISOString().split('T')[0];
-			
-			// 2. Build your markdown entry
-			const entry = [
-				heading,
-				`**Note:** ${input}`,
-				`**Date:** ${date}`,
-				''
-			].join('\n') + '\n';
+        const code = editor.document.getText(selection);
+        const lang = editor.document.languageId
+        const hash = CryptoJS.SHA1(code).toString(CryptoJS.enc.Hex).slice(0, 8)
 
-			// 3. Determine NOTES.md path
-			const notesPath = path.join(rootPath, 'NOTES.md');
+        vscode.window.showInputBox({
+            prompt: 'Write your note here…',
+            placeHolder: 'E.g. Fixed off-by-one error in parser',
+            ignoreFocusOut: true
+        })
+            .then(input => {
+                if (typeof input !== 'string') {
+                    return; // user cancelled
+                }
 
-			// 4. Append (or create if missing)
-			fs.appendFile(notesPath, entry, err => {
-				if (err) {
-					vscode.window.showErrorMessage(`Failed to write note: ${err.message}`);
-				} 
-				else {
-					vscode.window.showInformationMessage('Note saved to NOTES.md');
-					// Track location key
-					const key = `${editor.document.uri.fsPath}:${lineNum}`;
-					noteLocations.set(key, { uri: editor.document.uri, line: lineNum });
-					codeLensProvider.reload();
-				}
-			});
-		});
+                // 1. Figure out workspace folder
+                const folders = vscode.workspace.workspaceFolders;
+                if (!folders || folders.length === 0) {
+                    vscode.window.showErrorMessage('Open a folder first to save notes.');
+                    return;
+                }
 
-		// Display a message box to the user
-		vscode.window.showInformationMessage('Hello World from Live-Doc-Logger and Oitash!');
-	});
+                const rootPath = folders[0].uri.fsPath;
+                const relPath = path.relative(rootPath, editor.document.uri.fsPath);
+                const lineNum = editor.selection.active.line;
+                const heading = `### ${relPath}:${hash}`;
+                const date = new Date().toLocaleString();
 
-	// Command: Open an existing note
-	const openDisposable = vscode.commands.registerCommand('live-doc-logger.DocLogOpen', async args => {
-        const { uri, line } = args;
+                // 2. Build your markdown entry
+                const entry = [
+                    heading,
+                    `**Note:** ${input}`,
+                    `**Date:** ${date}`,
+                    '',
+                    // fenced code block
+                    `\`\`\`${lang}`,
+                    code,
+                    '```',
+                    '',
+                    ''
+                ].join('\n')
+
+                // 3. Determine NOTES.md path
+                const notesPath = path.join(rootPath, 'NOTES.md');
+
+                // 4. Append (or create if missing)
+                fs.appendFile(notesPath, entry, err => {
+                    if (err) {
+                        vscode.window.showErrorMessage(`Failed to write note: ${err.message}`);
+                    }
+                    else {
+                        vscode.window.showInformationMessage('Note saved to NOTES.md');
+                        // Track location key
+                        const key = `${editor.document.uri.fsPath}:${hash}`;
+                        noteLocations.set(key, { uri: editor.document.uri, line: lineNum, hash: hash });
+                        codeLensProvider.reload();
+                    }
+                });
+            });
+
+        // Display a message box to the user
+        vscode.window.showInformationMessage('Hello World from Live-Doc-Logger and Oitash!');
+    })
+
+    const disposable2 = vscode.commands.registerCommand('live-doc-logger.showCommands', () => {
+        vscode.commands.executeCommand('workbench.action.showCommands');
+    }
+    )
+
+    // Command: Open an existing note
+    const openDisposable = vscode.commands.registerCommand('live-doc-logger.DocLogOpen', async args => {
+        const { uri, line, hash } = args
         const folders = vscode.workspace.workspaceFolders;
 
         if (!folders || folders.length === 0) { return; }
+
+        // const root = folders[0].uri.fsPath;
+        // const relUnescaped = path.relative(root, uri.fsPath)
+
+        // const rel = relUnescaped.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+        // const regex = new RegExp(`^###\\s+${rel}:${hash}$`)
+
         const root = folders[0].uri.fsPath;
         const rel = path.relative(root, uri.fsPath);
 
@@ -100,16 +141,21 @@ function activate(context) {
         const ed = await vscode.window.showTextDocument(doc);
 
         // Search for matching entry header
-        const regex = new RegExp(`^###\\s+${rel}:${line + 1}\\b`);
+        const regex = new RegExp(`^###\\s+${rel}:${hash}\\b`);
         const matchLine = doc.getText().split(/\r?\n/).findIndex(l => regex.test(l));
+
+        // const lines = doc.getText().split(/\r?\n/);
+        // const matchLine = lines.findIndex(line => regex.test(line))
         if (matchLine >= 0) {
             const pos = new vscode.Position(matchLine, 0);
             ed.revealRange(new vscode.Range(pos, pos), vscode.TextEditorRevealType.InCenter);
             ed.selection = new vscode.Selection(pos, pos);
+        } else {
+            vscode.window.showWarningMessage(`Could not locate note “${hash}” in NOTES.md`)
         }
     });
 
-	// Command: Edit an existing note
+    // Command: Edit an existing note
     const editDisposable = vscode.commands.registerCommand('live-doc-logger.DocLogEdit', async ({ uri, line }) => {
         const folder = vscode.workspace.workspaceFolders?.[0];
         if (!folder) return;
@@ -157,7 +203,23 @@ function activate(context) {
         vscode.window.showInformationMessage('Note deleted from NOTES.md');
     });
 
-	// CodeLens provider to show action above logged lines
+    const goToSourceDisposable = vscode.commands.registerCommand(
+        'live-doc-logger.DocLogGoToSource',
+        async (loc) => {
+            // `loc` is exactly the object you stored: { uri, line, hash }
+            const { uri, line } = loc;
+            const doc = await vscode.workspace.openTextDocument(uri);
+            const ed = await vscode.window.showTextDocument(doc);
+            const pos = new vscode.Position(line, 0);
+            ed.revealRange(
+                new vscode.Range(pos, pos),
+                vscode.TextEditorRevealType.InCenter
+            );
+            ed.selection = new vscode.Selection(pos, pos);
+        }
+    )
+
+    // CodeLens provider to show action above logged lines
     codeLensProvider = new (class {
         constructor() { this._onDidChange = new vscode.EventEmitter(); }
         get onDidChangeCodeLenses() { return this._onDidChange.event; }
@@ -179,16 +241,55 @@ function activate(context) {
         }
     })();
 
-	context.subscriptions.push(disposable, openDisposable, editDisposable, deleteDisposable);
+    const markdownProvider = new (class {
+        provideCodeLenses(document) {
+            if (!document.fileName.endsWith('NOTES.md')) {
+                return [];
+            }
+
+            const lenses = [];
+            const text = document.getText();
+            const re = /^###\s+(.+?):([0-9a-f]{8})$/gm;
+            let match;
+
+            // need workspace root to reconstruct the map key
+            const folders = vscode.workspace.workspaceFolders;
+            if (!folders?.length) return lenses;
+            const root = folders[0].uri.fsPath;
+
+            while ((match = re.exec(text))) {
+                const relPath = match[1];
+                const hash = match[2];
+                // build the same key you used when storing
+                const key = `${path.join(root, relPath)}:${hash}`;
+                const loc = noteLocations.get(key);
+                if (!loc) continue;
+
+                const line = document.positionAt(match.index).line;
+                const range = new vscode.Range(line, 0, line, 0);
+
+                lenses.push(new vscode.CodeLens(range, {
+                    title: '↩️ Go Back',
+                    command: 'live-doc-logger.DocLogGoToSource',
+                    arguments: [loc]
+                }));
+            }
+
+            return lenses;
+        }
+    })()
+
+    context.subscriptions.push(sb, disposable, disposable2, goToSourceDisposable, openDisposable, editDisposable, deleteDisposable);
     context.subscriptions.push(
-        vscode.languages.registerCodeLensProvider({ scheme: 'file' }, codeLensProvider)
+        vscode.languages.registerCodeLensProvider({ scheme: 'file' }, codeLensProvider),
+        vscode.languages.registerCodeLensProvider({ language: 'markdown', scheme: 'file' }, markdownProvider)
     );
 }
 
 // This method is called when your extension is deactivated
-function deactivate() {}
+function deactivate() { }
 
 module.exports = {
-	activate,
-	deactivate
+    activate,
+    deactivate
 }
